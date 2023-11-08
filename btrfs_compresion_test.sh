@@ -107,15 +107,15 @@ mkfs.btrfs $disk_dev || exit 1
 
 function test_compression {
 	# 测量压缩耗时
-	trap : SIGINT
 	[ "$(ls -A "$TEMP_MOUNT")" ] && rm -rf $TEMP_MOUNT/*
-	(time cp -af "$TEMP_DIR" "$TEMP_MOUNT") 2>&1 | grep real | awk '{
+	sync && echo 1 > /proc/sys/vm/drop_caches
+	(time (cp -af "$TEMP_DIR" "$TEMP_MOUNT";sync)) 2>&1 | grep real | awk '{
 	print "compressed time " $2*60+substr($2,index($2,"m")+1)}'
 	# 测量压缩率
 	compsize -x "$TEMP_MOUNT" | grep TOTAL | awk '{print "compression ratio " $2}'
-	trap break SIGINT
 	#测量解压耗时
 	rm -rf $TEMP_DIR
+	sync && echo 1 > /proc/sys/vm/drop_caches
 	(time cp -af "$TEMP_MOUNT/$(basename $TEMP_DIR)" "$(dirname "$TEMP_DIR")") 2>&1 | grep real | awk '{
 	print "decompressed time " $2*60+substr($2,index($2,"m")+1)}'
 	[ "$(ls -A "$TEMP_MOUNT")" ] && rm -rf $TEMP_MOUNT/*
