@@ -3,7 +3,7 @@
 # btrfs测试压缩性能
 # 尝试用测试tar文件在磁盘设备/dev/sdaN进行btrfs性能测试
 # ./btrfs_compression_test.sh [device] [tar_file] [disk_size]
-# 若不指定device，则尝试在ext4根文件系统上分出512M磁盘空间用作测试
+# 若不指定device，则尝试在文件系统上创建512M磁盘镜像用作测试
 # 若不指定tar_file，则下载glibc源码用作测试文件
 # 压缩性能：先将测试文件解压到内存，并设置好btrfs压缩参数，复制到btrfs磁盘中
 # 解压性能：从已压缩的btrfs磁盘中复制文件到内存中
@@ -20,11 +20,12 @@ function _erro {
 }
 
 [ "$*" = "-h" ] && {
-	echo './btrfs_compression_test.sh [devices] [tar_file] [disk_size]
+	echo './btrfs_compression_test.sh [devices] [tar_file] [disk_size] -<number>
     -h              display this help
     [device]        test disk device or disk img file
     [tar_file]      test tar file(.tar .tar.gz .tgz) or directory,
-    [disk_size]     the disk img file size in MB'
+    [disk_size]     the disk img file size in MB
+    -<number>       test file copy multiple times'
 	exit
 }
 
@@ -35,28 +36,11 @@ function _erro {
 
 [ $(id -u) -ne 0 ] && _erro "Please run as root!" && exit 1
 
-function checkcmd_install ()
-{
-	local pkgname
-	while [ $# -gt 0 ]; do
-		if ! which $1 &>/dev/null; then
-			if ! ls /usr/sbin/$1 &>/dev/null; then
-				[[ "$(cat /proc/version)" =~ Debian ]] && {
-					! ls /bin/apt-file &>/dev/null && sudo apt install apt-file && sudo apt-file update
-					pkgname=$(apt-file -x search "^/(usr/local/sbin|usr/local/bin|usr/sbin|usr/bin|sbin|bin)/$1\$")
-					[ -n "$pkgname" ] && sudo apt install ${pkgname%%:*}
-				}
-				[ $? -ne 0 ] && {
-					_erro "$1 can not to execute!"
-					exit 126
-				}
-			fi
-		fi
-		shift
-	done
-}
+checkcmd_install="$(wget -qO- https://github.com/756yang/shell_common/raw/main/checkcmd_install.sh)"
+
 # 检查需要的命令
-checkcmd_install tar wget gzip btrfs compsize
+bash -c "$checkcmd_install" @ tar wget gzip btrfs compsize
+[ $? -ne 0 ] && exit 1
 
 function test_cleanup {
 	umount $disk_dev
@@ -73,11 +57,14 @@ TEMP_MOUNT=/dev/shm/MOUNT_BTRFS
 mkdir "$TEMP_DIR" "$TEMP_MOUNT"
 disk_file="disk_btrfs.img"
 disk_size=512
+multi_copy=1
 while [ $# -gt 0 ]; do
-	if expr "$1" + 0 &>/dev/null; then
+	if [ "$1" -ge 0 ] &>/dev/null; then
 		disk_size="$1"
+	elif [ "$1" -lt 0 ] &>/dev/null; then
+		multi_copy=$((-$1))
 	elif [ -d "$1" ]; then
-		cp -af "$1" "$TEMP_DIR"
+		cp -af "$1/." "$TEMP_DIR"
 	elif [ "$1" = "-" -o ${1##*.} = tar ]; then
 		tar -xf "$1" -C "$TEMP_DIR"
 	elif [ ${1##*.} = tgz -o "${1: -7}" = ".tar.gz" ]; then
@@ -94,7 +81,13 @@ done
 [ -z "$(ls -A "$TEMP_DIR")" ] && {
 	wget -qO- "http://ftp.gnu.org/gnu/glibc/glibc-2.36.tar.gz" | tar -xzf - -C "$TEMP_DIR"
 }
-
+[ $multi_copy -gt 1 ] && {
+	mv "$TEMP_DIR"/{.,}* "$TEMP_MOUNT" &>/dev/null
+	for ((i=1;i<$multi_copy;i++)); do
+		cp -af "$TEMP_MOUNT" "$TEMP_DIR/test$i"
+	done
+	mv "$TEMP_MOUNT" "$TEMP_DIR/test$multi_copy" && mkdir "$TEMP_MOUNT"
+}
 
 [ -b "$disk_file" ] && disk_dev="$disk_file" || { # 建立文件映像并关联loop设备
 	dd if=/dev/zero "of=$disk_file" bs=1M count=$disk_size status=progress || exit 2
@@ -107,18 +100,18 @@ mkfs.btrfs $disk_dev || exit 1
 
 function test_compression {
 	# 测量压缩耗时
-	[ "$(ls -A "$TEMP_MOUNT")" ] && rm -rf $TEMP_MOUNT/*
+	[ "$(ls -A "$TEMP_MOUNT")" ] && rm -rf "$TEMP_MOUNT"/{.,}* &>/dev/null
 	sync && echo 1 > /proc/sys/vm/drop_caches
-	(time (cp -af "$TEMP_DIR" "$TEMP_MOUNT";sync)) 2>&1 | grep real | awk '{
+	(time (cp -af "$TEMP_DIR/." "$TEMP_MOUNT";sync)) 2>&1 | grep real | awk '{
 	print "compressed time " $2*60+substr($2,index($2,"m")+1)}'
 	# 测量压缩率
 	compsize -x "$TEMP_MOUNT" | grep TOTAL | awk '{print "compression ratio " $2}'
 	#测量解压耗时
-	rm -rf $TEMP_DIR
+	rm -rf "$TEMP_DIR"/{.,}* &>/dev/null
 	sync && echo 1 > /proc/sys/vm/drop_caches
-	(time cp -af "$TEMP_MOUNT/$(basename $TEMP_DIR)" "$(dirname "$TEMP_DIR")") 2>&1 | grep real | awk '{
+	(time cp -af "$TEMP_MOUNT/." "$TEMP_DIR") 2>&1 | grep real | awk '{
 	print "decompressed time " $2*60+substr($2,index($2,"m")+1)}'
-	[ "$(ls -A "$TEMP_MOUNT")" ] && rm -rf $TEMP_MOUNT/*
+	[ "$(ls -A "$TEMP_MOUNT")" ] && rm -rf "$TEMP_MOUNT"/{.,}* &>/dev/null
 }
 
 mount -t btrfs $disk_dev "$TEMP_MOUNT"

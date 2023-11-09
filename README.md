@@ -13,7 +13,7 @@
 
 如果测试系统文件压缩，运行命令：
 
-	wget -qO- https://github.com/756yang/btrfs_compression_test/raw/main/debian9test.tar.xz | xz -dc - | sudo bash -c "$(wget -qO- https://github.com/756yang/btrfs_compression_test/raw/main/btrfs_compresion_test.sh)" @ -
+	wget -qO- https://github.com/756yang/btrfs_compression_test/raw/main/debian9test.tar.xz | xz -dc - | sudo bash -c "$(wget -qO- https://github.com/756yang/btrfs_compression_test/raw/main/btrfs_compresion_test.sh)" @ -8 -
 
 测试时，你随时可以按Ctrl+C终止循环或测试，脚本退出时会自动清理。
 
